@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from src.bridge import format_file_context, handle_call, MCPServer
+from src.bridge import format_file_context, delegate, MCPServer
 
 
 def test_format_file_context_existing_file(tmp_path):
@@ -23,11 +23,11 @@ def test_format_file_context_empty():
 
 
 @pytest.mark.asyncio
-async def test_handle_call_success():
+async def test_delegate_success():
     with patch("src.bridge.run_gemini", new_callable=AsyncMock) as mock:
-        mock.return_value = {"success": True, "response": "Success!", "error": ""}
+        mock.return_value = {"success": True, "response": "Success!"}
 
-        result = await handle_call("test prompt", [])
+        result = await delegate("test prompt", [])
 
         assert result["success"] is True
         assert result["response"] == "Success!"
@@ -35,14 +35,14 @@ async def test_handle_call_success():
 
 
 @pytest.mark.asyncio
-async def test_handle_call_fallback():
+async def test_delegate_fallback():
     with patch("src.bridge.run_gemini", new_callable=AsyncMock) as mock:
         mock.side_effect = [
-            {"success": False, "response": "", "error": "Pro failed"},
-            {"success": True, "response": "Flash success!", "error": ""},
+            {"success": False, "error": "Pro failed"},
+            {"success": True, "response": "Flash success!"},
         ]
 
-        result = await handle_call("test prompt", [])
+        result = await delegate("test prompt", [])
 
         assert result["success"] is True
         assert result["response"] == "Flash success!"
@@ -50,7 +50,55 @@ async def test_handle_call_fallback():
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_initialize():
+async def test_delegate_no_fallback():
+    with patch("src.bridge.run_gemini", new_callable=AsyncMock) as mock:
+        with patch("src.bridge.FALLBACK_MODEL", ""):
+            mock.return_value = {"success": False, "error": "Primary failed"}
+
+            result = await delegate("test prompt", [])
+
+            assert result["success"] is False
+            assert result["error"] == "Primary failed"
+            assert "response" not in result
+            assert mock.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_delegate_with_flash_model():
+    with patch("src.bridge.run_gemini", new_callable=AsyncMock) as mock:
+        mock.return_value = {"success": True, "response": "Flash result!"}
+
+        result = await delegate("test prompt", [], "gemini-3-flash-preview")
+
+        assert result["success"] is True
+        mock.assert_called_once_with("test prompt", [], "gemini-3-flash-preview")
+
+
+@pytest.mark.asyncio
+async def test_delegate_with_invalid_model_defaults_to_primary():
+    with patch("src.bridge.run_gemini", new_callable=AsyncMock) as mock:
+        mock.return_value = {"success": True, "response": "Pro result!"}
+
+        result = await delegate("test prompt", [], "invalid-model")
+
+        assert result["success"] is True
+        mock.assert_called_once_with("test prompt", [], "gemini-3.1-pro-preview")
+
+
+@pytest.mark.asyncio
+async def test_delegate_flash_no_fallback_on_failure():
+    """When flash is requested and fails, no further fallback since it's already the fallback model."""
+    with patch("src.bridge.run_gemini", new_callable=AsyncMock) as mock:
+        mock.return_value = {"success": False, "error": "Flash failed"}
+
+        result = await delegate("test prompt", [], "gemini-3-flash-preview")
+
+        assert result["success"] is False
+        assert mock.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_mcp_initialize():
     mock_writer = MagicMock()
     server = MCPServer(MagicMock(), mock_writer)
 
@@ -65,7 +113,7 @@ async def test_mcp_server_initialize():
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_tools_list():
+async def test_mcp_tools_list():
     mock_writer = MagicMock()
     server = MCPServer(MagicMock(), mock_writer)
 
@@ -77,78 +125,7 @@ async def test_mcp_server_tools_list():
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_unknown_tool():
-    mock_writer = MagicMock()
-    server = MCPServer(MagicMock(), mock_writer)
-
-    await server._handle_request({"method": "tools/call", "id": 1, "params": {"name": "nonexistent"}})
-
-    response_json = mock_writer.write.call_args[0][0]
-    assert '"error"' in response_json
-    assert "Unknown tool" in response_json
-
-
-@pytest.mark.asyncio
-async def test_mcp_server_unknown_method():
-    mock_writer = MagicMock()
-    server = MCPServer(MagicMock(), mock_writer)
-
-    await server._handle_request({"method": "unknown/method", "id": 1})
-
-    response_json = mock_writer.write.call_args[0][0]
-    assert '"error"' in response_json
-
-
-@pytest.mark.asyncio
-async def test_handle_call_no_fallback():
-    with patch("src.bridge.run_gemini", new_callable=AsyncMock) as mock:
-        with patch("src.bridge.FALLBACK_MODEL", ""):
-            mock.return_value = {"success": False, "error": "Primary failed"}
-
-            result = await handle_call("test prompt", [])
-
-            assert result["success"] is False
-            assert result["error"] == "Primary failed"
-            assert "response" not in result
-            assert mock.call_count == 1  # Should not retry if no fallback
-
-
-@pytest.mark.asyncio
-async def test_handle_call_with_flash_model():
-    with patch("src.bridge.run_gemini", new_callable=AsyncMock) as mock:
-        mock.return_value = {"success": True, "response": "Flash result!"}
-
-        result = await handle_call("test prompt", [], "gemini-3-flash-preview")
-
-        assert result["success"] is True
-        mock.assert_called_once_with("test prompt", [], "gemini-3-flash-preview")
-
-
-@pytest.mark.asyncio
-async def test_handle_call_with_invalid_model_defaults_to_primary():
-    with patch("src.bridge.run_gemini", new_callable=AsyncMock) as mock:
-        mock.return_value = {"success": True, "response": "Pro result!"}
-
-        result = await handle_call("test prompt", [], "invalid-model")
-
-        assert result["success"] is True
-        mock.assert_called_once_with("test prompt", [], "gemini-3.1-pro-preview")
-
-
-@pytest.mark.asyncio
-async def test_handle_call_flash_no_fallback_on_failure():
-    """When flash is requested and fails, no further fallback since it's already the fallback model."""
-    with patch("src.bridge.run_gemini", new_callable=AsyncMock) as mock:
-        mock.return_value = {"success": False, "error": "Flash failed"}
-
-        result = await handle_call("test prompt", [], "gemini-3-flash-preview")
-
-        assert result["success"] is False
-        assert mock.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_mcp_server_tools_list_has_model_param():
+async def test_mcp_tools_list_has_model_param():
     mock_writer = MagicMock()
     server = MCPServer(MagicMock(), mock_writer)
 
@@ -158,3 +135,28 @@ async def test_mcp_server_tools_list_has_model_param():
     assert '"model"' in response_json
     assert '"flash"' in response_json
     assert '"pro"' in response_json
+
+
+@pytest.mark.asyncio
+async def test_mcp_unknown_tool():
+    mock_writer = MagicMock()
+    server = MCPServer(MagicMock(), mock_writer)
+
+    await server._handle_request(
+        {"method": "tools/call", "id": 1, "params": {"name": "nonexistent"}}
+    )
+
+    response_json = mock_writer.write.call_args[0][0]
+    assert '"error"' in response_json
+    assert "Unknown tool" in response_json
+
+
+@pytest.mark.asyncio
+async def test_mcp_unknown_method():
+    mock_writer = MagicMock()
+    server = MCPServer(MagicMock(), mock_writer)
+
+    await server._handle_request({"method": "unknown/method", "id": 1})
+
+    response_json = mock_writer.write.call_args[0][0]
+    assert '"error"' in response_json
