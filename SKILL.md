@@ -47,5 +47,5 @@ The bridge supports environment variables for tuning:
 If the tool is not already active in your Claude Code environment, run the following command to register it:
 
 ```bash
-claude mcp add -s user claude-to-gemini python ~/.claude-to-gemini/src/bridge.py
+claude mcp add -s user claude-to-gemini python3 ~/.claude-to-gemini/src/bridge.py
 ```
