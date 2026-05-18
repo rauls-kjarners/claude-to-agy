@@ -79,13 +79,13 @@ def format_file_context(files: list[str]) -> str:
 
 async def spawn_gemini(prompt: str, model: str) -> asyncio.subprocess.Process:
     """Launch the gemini CLI as a subprocess."""
+    cmd = ["gemini", "-p", prompt]
+    if model:  # Only add -m flag if model is specified
+        cmd.extend(["-m", model])
+
     return await asyncio.wait_for(
         asyncio.create_subprocess_exec(
-            "gemini",
-            "-p",
-            prompt,
-            "-m",
-            model,
+            *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         ),
@@ -151,16 +151,19 @@ async def delegate(prompt: str, files: list[str], model: str = "") -> GeminiResu
     if result["success"]:
         return result
 
-    if FALLBACK_MODEL and target != FALLBACK_MODEL:
+    # Always try fallback if it's different from target (even if empty string)
+    if target != FALLBACK_MODEL:
         logger.warning(
             "Model (%s) failed: %s. Retrying with fallback (%s).",
-            target,
+            target or "default",
             result["error"],
-            FALLBACK_MODEL,
+            FALLBACK_MODEL or "default",
         )
         return await run_gemini(prompt, files, FALLBACK_MODEL)
 
-    logger.error("Model (%s) failed and no further fallback available.", target)
+    logger.error(
+        "Model (%s) failed and no further fallback available.", target or "default"
+    )
     return result
 
 

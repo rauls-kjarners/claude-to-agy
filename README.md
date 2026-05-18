@@ -52,10 +52,26 @@ All settings are optional environment variables:
 
 | Variable | Default | Description |
 |---|---|---|
-| `GEMINI_PRIMARY_MODEL` | `gemini-3.1-pro-preview` | Primary model to try first |
-| `GEMINI_FALLBACK_MODEL` | `gemini-3-flash-preview` | Fallback model (set empty to disable) |
+| `GEMINI_PRIMARY_MODEL` | `gemini-3.1-pro-preview` | Primary model to try first (set to `""` to use gemini's default) |
+| `GEMINI_FALLBACK_MODEL` | `gemini-3-flash-preview` | Fallback model if primary fails (set to `""` to use gemini's default) |
 | `GEMINI_CONNECT_TIMEOUT` | `60` | Seconds to start the gemini process |
 | `GEMINI_TOTAL_TIMEOUT` | `600` | Hard timeout for entire execution |
+
+**Examples:**
+
+```bash
+# Use specific models with fallback (default behavior)
+export GEMINI_PRIMARY_MODEL="gemini-3.1-pro-preview"
+export GEMINI_FALLBACK_MODEL="gemini-3-flash-preview"
+
+# Let gemini CLI choose its own default model (no -m flag)
+export GEMINI_PRIMARY_MODEL=""
+export GEMINI_FALLBACK_MODEL=""
+
+# Use custom primary, gemini default as fallback
+export GEMINI_PRIMARY_MODEL="gemini-2.5-pro"
+export GEMINI_FALLBACK_MODEL=""
+```
 
 ## How It Works
 
@@ -67,8 +83,9 @@ User → Claude Code → MCP bridge (bridge.py) → gemini CLI → Gemini API
 1. `CLAUDE.md` instructs Claude when to delegate
 2. Claude calls `delegate_to_gemini(prompt, files, model)` via MCP
 3. `bridge.py` reads the files, prepends them to the prompt
-4. Runs `gemini -p "<prompt>" -m <model>` with timeout protection
+4. Runs `gemini -p "<prompt>"` (optionally with `-m <model>` if configured)
 5. Returns `{"success": true, "response": "..."}` or `{"success": false, "error": "..."}` back to Claude
+6. On failure, automatically retries with fallback model (if configured)
 
 ## Development
 
