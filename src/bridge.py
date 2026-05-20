@@ -1,7 +1,7 @@
-"""Claude-to-Gemini MCP Bridge.
+"""Claude-to-Antigravity MCP Bridge.
 
-A zero-dependency MCP server that delegates tasks to the Gemini CLI
-with automatic model fallback and configurable timeouts.
+A zero-dependency MCP server that delegates tasks to the Antigravity CLI (agy)
+with configurable timeouts.
 """
 
 import sys
@@ -16,35 +16,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-CONNECT_TIMEOUT = int(os.environ.get("GEMINI_CONNECT_TIMEOUT", "60"))
-TOTAL_TIMEOUT = int(os.environ.get("GEMINI_TOTAL_TIMEOUT", "600"))
-PRIMARY_MODEL = os.environ.get("GEMINI_PRIMARY_MODEL", "gemini-3.1-pro-preview")
-FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3-flash-preview")
-
-MODEL_ALIASES = {"flash": FALLBACK_MODEL, "pro": PRIMARY_MODEL}
+CONNECT_TIMEOUT = int(os.environ.get("AGY_CONNECT_TIMEOUT", "60"))
+TOTAL_TIMEOUT = int(os.environ.get("AGY_TOTAL_TIMEOUT", "600"))
 
 TOOL_SCHEMA = {
-    "name": "delegate_to_gemini",
-    "description": "Delegate complex reasoning, large file analysis, or deep search to Gemini.",
+    "name": "delegate_to_agy",
+    "description": "Delegate complex reasoning, large file analysis, or deep search to Antigravity CLI (agy).",
     "inputSchema": {
         "type": "object",
         "properties": {
             "prompt": {
                 "type": "string",
-                "description": "The detailed prompt/instructions for Gemini.",
+                "description": "The detailed prompt/instructions for Antigravity CLI.",
             },
             "files": {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Optional list of absolute file paths to include as context.",
-            },
-            "model": {
-                "type": "string",
-                "enum": ["flash", "pro"],
-                "description": (
-                    "Optional. 'flash' for fast simple tasks, "
-                    "'pro' for complex reasoning. Defaults to pro."
-                ),
             },
         },
         "required": ["prompt"],
@@ -52,7 +40,7 @@ TOOL_SCHEMA = {
 }
 
 
-class GeminiResult(TypedDict, total=False):
+class AgyResult(TypedDict, total=False):
     success: bool
     response: str
     error: str
@@ -77,15 +65,11 @@ def format_file_context(files: list[str]) -> str:
     return "\n".join(read_file(path) for path in files) + "\n"
 
 
-async def spawn_gemini(prompt: str, model: str) -> asyncio.subprocess.Process:
-    """Launch the gemini CLI as a subprocess."""
-    cmd = ["gemini", "-p", prompt]
-    if model:  # Only add -m flag if model is specified
-        cmd.extend(["-m", model])
-
+async def spawn_agy(prompt: str) -> asyncio.subprocess.Process:
+    """Launch the agy CLI as a subprocess."""
     return await asyncio.wait_for(
         asyncio.create_subprocess_exec(
-            *cmd,
+            "agy", "-p", prompt,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         ),
@@ -105,66 +89,40 @@ async def collect_output(process: asyncio.subprocess.Process) -> tuple[str, str]
     )
 
 
-async def run_gemini(prompt: str, files: list[str], model: str) -> GeminiResult:
-    """Send a prompt to the Gemini CLI and return the result."""
+async def run_agy(prompt: str, files: list[str]) -> AgyResult:
+    """Send a prompt to the Antigravity CLI and return the result."""
     full_prompt = format_file_context(files) + prompt
 
     try:
-        process = await spawn_gemini(full_prompt, model)
+        process = await spawn_agy(full_prompt)
     except asyncio.TimeoutError:
-        return GeminiResult(
+        return AgyResult(
             success=False, error=f"Connect timeout ({CONNECT_TIMEOUT}s) exceeded."
         )
     except Exception as error:
-        return GeminiResult(success=False, error=f"Failed to start gemini: {error}")
+        return AgyResult(success=False, error=f"Failed to start agy: {error}")
 
     try:
         stdout, stderr = await collect_output(process)
     except asyncio.TimeoutError:
         process.kill()
         await process.wait()
-        return GeminiResult(
+        return AgyResult(
             success=False, error=f"Total timeout ({TOTAL_TIMEOUT}s) exceeded."
         )
 
     if process.returncode != 0:
-        return GeminiResult(
+        return AgyResult(
             success=False,
             error=f"Process exited with code {process.returncode}. Stderr: {stderr}",
         )
 
-    return GeminiResult(success=True, response=stdout)
+    return AgyResult(success=True, response=stdout)
 
 
-def resolve_model(requested: str) -> str:
-    """Return the requested model if valid, otherwise the primary model."""
-    if requested in (PRIMARY_MODEL, FALLBACK_MODEL):
-        return requested
-    return PRIMARY_MODEL
-
-
-async def delegate(prompt: str, files: list[str], model: str = "") -> GeminiResult:
-    """Run the prompt against Gemini, falling back to the secondary model on failure."""
-    target = resolve_model(model)
-    result = await run_gemini(prompt, files, target)
-
-    if result["success"]:
-        return result
-
-    # Always try fallback if it's different from target (even if empty string)
-    if target != FALLBACK_MODEL:
-        logger.warning(
-            "Model (%s) failed: %s. Retrying with fallback (%s).",
-            target or "default",
-            result["error"],
-            FALLBACK_MODEL or "default",
-        )
-        return await run_gemini(prompt, files, FALLBACK_MODEL)
-
-    logger.error(
-        "Model (%s) failed and no further fallback available.", target or "default"
-    )
-    return result
+async def delegate(prompt: str, files: list[str]) -> AgyResult:
+    """Run the prompt against Antigravity CLI. Thin wrapper for potential future extensibility."""
+    return await run_agy(prompt, files)
 
 
 class MCPServer:
@@ -243,7 +201,7 @@ class MCPServer:
             {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "claude-to-gemini", "version": "1.1.0"},
+                "serverInfo": {"name": "claude-to-agy", "version": "2.0.0"},
             },
         )
 
@@ -256,16 +214,14 @@ class MCPServer:
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
 
-        if tool_name != "delegate_to_gemini":
+        if tool_name != "delegate_to_agy":
             self.send_error(request_id, -32601, f"Unknown tool: {tool_name}")
             return
 
         prompt = arguments.get("prompt", "")
         files = arguments.get("files", [])
-        model_alias = arguments.get("model", "")
-        model = MODEL_ALIASES.get(model_alias, "")
 
-        result = await delegate(prompt, files, model)
+        result = await delegate(prompt, files)
 
         self.send_result(
             request_id,
