@@ -42,3 +42,27 @@ If the tool is not already active in your Claude Code environment, run the follo
 ```bash
 claude mcp add -s user claude-to-agy python3 ~/.claude-to-agy/src/bridge.py
 ```
+
+## Subagent Enforcement (Hooks)
+
+Subagents do **not** read skill/CLAUDE.md rules and will run `grep`, `git diff`, etc. directly. Add the following PreToolUse hook to `~/.claude/settings.json` to block banned commands for **all** agents:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude-to-agy/src/hooks/block-direct-commands.py",
+            "onError": "block"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+

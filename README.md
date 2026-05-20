@@ -30,11 +30,40 @@ claude mcp add -s user claude-to-agy python3 ~/.claude-to-agy/src/bridge.py
 
 # 3. Copy the rules file into any project where you want delegation
 cp ~/.claude-to-agy/CLAUDE.md /path/to/your/project/CLAUDE.md
+
+# 4. (Optional) Add the PreToolUse hook to enforce delegation for subagents
+```
+
+Then merge the following into your `~/.claude/settings.json` (or per-project `.claude/settings.json`):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude-to-agy/src/hooks/block-direct-commands.py",
+            "onError": "block"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 That's it. Claude will now automatically delegate heavy tasks to Antigravity CLI in any project that has the `CLAUDE.md` file.
 
 > **Tip:** To enable globally without copying `CLAUDE.md` per project, add the rules to `~/.claude/CLAUDE.md` instead.
+
+### Why the Hook Matters
+
+`CLAUDE.md` rules only apply to the **main** Claude agent. Subagents (spawned via `run_subagent` or similar) **do not** read `CLAUDE.md` and will run `grep -r`, `git diff`, etc. directly — wasting tokens and defeating the purpose of delegation.
+
+The PreToolUse hook runs at the Claude Code platform level for **all** agents (main + sub), mechanically blocking banned commands before they execute.
 
 ### Using as a Skill
 

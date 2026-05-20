@@ -1,4 +1,5 @@
 .antigravitycli/
 .idea/
 src/__pycache__/
+tests/hooks/__pycache__/
 tests/__pycache__/
