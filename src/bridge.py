@@ -9,7 +9,7 @@ import json
 import asyncio
 import os
 import logging
-from typing import IO, TypedDict
+from typing import IO, TypedDict, Any
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 CONNECT_TIMEOUT = int(os.environ.get("AGY_CONNECT_TIMEOUT", "60"))
 TOTAL_TIMEOUT = int(os.environ.get("AGY_TOTAL_TIMEOUT", "600"))
+VERSION = "2.2.0"
 
 TOOL_SCHEMA = {
     "name": "delegate_to_agy",
@@ -29,13 +30,17 @@ TOOL_SCHEMA = {
                 "type": "string",
                 "description": "The detailed prompt/instructions for Antigravity CLI.",
             },
+            "cwd": {
+                "type": "string",
+                "description": "The working directory of the project (absolute path).",
+            },
             "files": {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Optional list of absolute file paths to include as context.",
             },
         },
-        "required": ["prompt"],
+        "required": ["prompt", "cwd"],
     },
 }
 
@@ -46,30 +51,29 @@ class AgyResult(TypedDict, total=False):
     error: str
 
 
-def read_file(file_path: str) -> str:
-    """Read a single file and return its content with a header, or an error marker."""
-    if not os.path.exists(file_path):
-        return f"--- File: {file_path} (File not found) ---\n"
-    try:
-        with open(file_path, "r", encoding="utf-8") as handle:
-            content = handle.read()
-        return f"--- File: {file_path} ---\n{content}\n"
-    except Exception as error:
-        return f"--- File: {file_path} (Error reading: {error}) ---\n"
-
-
-def format_file_context(files: list[str]) -> str:
-    """Read all files and join them into a single context string."""
+def build_files_context(files: list[str]) -> str:
+    """Build a context string from a list of file paths."""
     if not files:
         return ""
-    return "\n".join(read_file(path) for path in files) + "\n"
+    file_list = "\n".join(f"- {f}" for f in files)
+    return f"Context files:\n{file_list}\n\n"
 
 
-async def spawn_agy(prompt: str) -> asyncio.subprocess.Process:
+async def spawn_agy(prompt: str, workspace_dir: str) -> asyncio.subprocess.Process:
     """Launch the agy CLI as a subprocess."""
+    cmd = [
+        "agy",
+        "--dangerously-skip-permissions",
+        "--add-dir",
+        workspace_dir,
+        "-p",
+        prompt,
+    ]
+
     return await asyncio.wait_for(
         asyncio.create_subprocess_exec(
-            "agy", "-p", prompt,
+            *cmd,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         ),
@@ -89,12 +93,13 @@ async def collect_output(process: asyncio.subprocess.Process) -> tuple[str, str]
     )
 
 
-async def run_agy(prompt: str, files: list[str]) -> AgyResult:
+async def run_agy(prompt: str, workspace_dir: str) -> AgyResult:
     """Send a prompt to the Antigravity CLI and return the result."""
-    full_prompt = format_file_context(files) + prompt
+    logger.info(f"Running agy with workspace: {workspace_dir}")
+    logger.info(f"Prompt: {prompt}")
 
     try:
-        process = await spawn_agy(full_prompt)
+        process = await spawn_agy(prompt, workspace_dir)
     except asyncio.TimeoutError:
         return AgyResult(
             success=False, error=f"Connect timeout ({CONNECT_TIMEOUT}s) exceeded."
@@ -120,11 +125,6 @@ async def run_agy(prompt: str, files: list[str]) -> AgyResult:
     return AgyResult(success=True, response=stdout)
 
 
-async def delegate(prompt: str, files: list[str]) -> AgyResult:
-    """Run the prompt against Antigravity CLI. Thin wrapper for potential future extensibility."""
-    return await run_agy(prompt, files)
-
-
 class MCPServer:
     """Minimal MCP JSON-RPC server over stdio."""
 
@@ -137,11 +137,11 @@ class MCPServer:
         self.writer.write(json.dumps(payload) + "\n")
         self.writer.flush()
 
-    def send_result(self, request_id: int | str | None, result: dict) -> None:
+    def send_result(self, request_id: Any, result: dict) -> None:
         """Send a successful JSON-RPC response."""
         self.send_json({"jsonrpc": "2.0", "id": request_id, "result": result})
 
-    def send_error(self, request_id: int | str | None, code: int, message: str) -> None:
+    def send_error(self, request_id: Any, code: int, message: str) -> None:
         """Send a JSON-RPC error response."""
         self.send_json(
             {
@@ -194,22 +194,22 @@ class MCPServer:
         elif request_id is not None:
             self.send_error(request_id, -32601, f"Unknown method: {method}")
 
-    def on_initialize(self, request_id: int | str | None) -> None:
+    def on_initialize(self, request_id: Any) -> None:
         """Respond to the MCP initialize handshake."""
         self.send_result(
             request_id,
             {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "claude-to-agy", "version": "2.0.0"},
+                "serverInfo": {"name": "claude-to-agy", "version": VERSION},
             },
         )
 
-    def on_tools_list(self, request_id: int | str | None) -> None:
+    def on_tools_list(self, request_id: Any) -> None:
         """Return the list of available tools."""
         self.send_result(request_id, {"tools": [TOOL_SCHEMA]})
 
-    async def on_tools_call(self, request_id: int | str | None, params: dict) -> None:
+    async def on_tools_call(self, request_id: Any, params: dict) -> None:
         """Execute a tool and return the result."""
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
@@ -220,8 +220,10 @@ class MCPServer:
 
         prompt = arguments.get("prompt", "")
         files = arguments.get("files", [])
+        workspace_dir: str = arguments["cwd"]
 
-        result = await delegate(prompt, files)
+        full_prompt = build_files_context(files) + prompt
+        result = await run_agy(full_prompt, workspace_dir)
 
         self.send_result(
             request_id,

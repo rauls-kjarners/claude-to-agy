@@ -25,6 +25,12 @@ You should automatically use this tool whenever you encounter:
 4. **Web/external knowledge:** Web searches and documentation lookups.
 5. **Adversarial review / plan critique:** Always delegate.
 
+## How to Delegate
+- **Always pass `cwd`** with your current working directory (absolute path) so agy knows where the project is.
+- Formulate a clear, detailed `prompt` explaining exactly what needs to be found, analyzed, or searched.
+- Optionally pass relevant file paths in the `files` array.
+- Await the JSON response and use the summary/data provided by agy to fulfill the user's request.
+
 ## Configuration
 The bridge supports environment variables for tuning:
 - `AGY_CONNECT_TIMEOUT` - subprocess start timeout in seconds (default: `60`)

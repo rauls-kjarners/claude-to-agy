@@ -44,5 +44,6 @@ If you are unsure whether a file is large, delegate it anyway - Antigravity CLI 
 ## How to Delegate
 
 - Formulate a clear, detailed `prompt` explaining exactly what needs to be found, analyzed, or searched.
-- Call `delegate_to_agy` with your `prompt` and any relevant file paths in the `files` array.
+- **Always pass `cwd`** with your current working directory (absolute path) so agy knows where the project is.
+- Call `delegate_to_agy` with your `prompt`, `cwd`, and any relevant file paths in the `files` array.
 - Await the JSON response and use the summary/data provided by Antigravity CLI to fulfill the user's request.

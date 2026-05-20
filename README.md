@@ -64,9 +64,9 @@ User → Claude Code → MCP bridge (bridge.py) → agy CLI → Gemini API
 ```
 
 1. `CLAUDE.md` instructs Claude when to delegate
-2. Claude calls `delegate_to_agy(prompt, files)` via MCP
-3. `bridge.py` reads the files, prepends them to the prompt
-4. Runs `agy -p "<prompt>"`
+2. Claude calls `delegate_to_agy(prompt, cwd, files?)` via MCP
+3. `bridge.py` prepends file paths to the prompt
+4. Runs `agy --dangerously-skip-permissions --add-dir <cwd> -p "<prompt>"`
 5. Returns `{"success": true, "response": "..."}` or `{"success": false, "error": "..."}` back to Claude
 
 ## Development
